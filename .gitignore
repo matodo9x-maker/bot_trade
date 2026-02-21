@@ -1,0 +1,26 @@
+# venv
+.venv/
+venv/
+
+# secrets
+.env
+
+# caches
+__pycache__/
+*.pyc
+
+# runtime data
+/data/runtime/
+/data/datasets/
+/logs/
+
+# local
+*.log
+
+.env
+venv/
+.venv/
+__pycache__/
+dist/
+build/
+*.spec

@@ -1,0 +1,497 @@
+version: v1
+name: root_data_contract_v1
+description: >
+  Single source of truth for all runtime + training data objects in the bot_trade system.
+  All writers/builders must emit data that conforms to this contract.
+timezone: UTC
+
+# -----------------------------------------------------------------------------
+# GLOBAL CONSTANTS (DO NOT CHANGE IN PLACE; bump version instead)
+# -----------------------------------------------------------------------------
+enums:
+  action_type:
+    description: "Offline-RL action mapping"
+    allowed_values: [0, 1]
+    mapping:
+      0: SHORT
+      1: LONG
+
+  trade_status:
+    allowed_values: ["OPEN", "CLOSED"]
+
+  trade_direction:
+    allowed_values: ["LONG", "SHORT"]
+
+  exit_type:
+    allowed_values: ["TP", "SL", "TIME", "MANUAL", "UNKNOWN"]
+
+  policy_type:
+    allowed_values: ["rule", "ai", "ensemble", "replay"]
+
+# -----------------------------------------------------------------------------
+# OBJECT CONTRACTS
+# -----------------------------------------------------------------------------
+objects:
+
+  # ===========================================================================
+  # 1) SNAPSHOT (STATE) — IMMUTABLE / PRE-DECISION ONLY
+  # ===========================================================================
+  snapshot_v3:
+    storage:
+      kind: "json"
+      path_pattern: "data/runtime/snapshots/{snapshot_id}.json"
+      immutable: true
+
+    required_fields:
+      schema_version: { type: literal, value: "v3" }
+      snapshot_id:    { type: string, unique: true }
+      snapshot_time_utc:
+        type: int
+        description: "Decision candle close time (NOT execution time)."
+      symbol:          { type: string }
+      observer_time_utc:
+        type: int
+        description: "Wall-clock time when snapshot was recorded; >= snapshot_time_utc."
+
+      # Entry frame (decision frame)
+      ltf:
+        type: object
+        required_fields:
+          tf:        { type: string }
+          timestamp: { type: int, description: "Must equal snapshot_time_utc." }
+          price:
+            type: object
+            required_fields:
+              close:             { type: float }
+              range_pct:         { type: float }
+              atr_pct:           { type: float, nullable: true }
+              volatility_regime: { type: string }
+          micro_structure:
+            type: object
+            required_fields:
+              bos:                   { type: bool }
+              hh_ll_state:           { type: string }
+              distance_to_structure: { type: float }
+
+      # Higher timeframes (context/bias)
+      htf:
+        type: map
+        key_type: string
+        value_type: object
+        required_fields_each_value:
+          trend:             { type: string, nullable: true }
+          bos:               { type: bool, nullable: true }
+          liquidity_state:   { type: string, nullable: true }
+          market_regime:     { type: string, nullable: true }
+          volatility_regime: { type: string, nullable: true }
+
+      # Environment context (no future, no trade info)
+      context:
+        type: object
+        required_fields:
+          session:        { type: string }
+          funding_rate:   { type: float, nullable: true }
+          funding_zscore: { type: float, nullable: true }
+
+    forbidden_fields:
+      # absolutely forbidden to prevent leakage & circular coupling
+      - decision
+      - execution_state
+      - reward_state
+      - risk_unit
+      - pnl
+      - pnl_raw
+      - pnl_r
+      - exit_price
+      - exit_time_utc
+      - tp_price
+      - sl_price
+      - rr
+
+    invariants:
+      - "snapshot_time_utc <= observer_time_utc"
+      - "ltf.timestamp == snapshot_time_utc"
+      - "snapshot must be pre-decision only; no reward/execution/trade fields allowed"
+
+  # ===========================================================================
+  # 2) TRADE AGGREGATE — LINKS SNAPSHOTS + DECISION + EXECUTION + REWARD + POLICY
+  # ===========================================================================
+  trade_aggregate_v1:
+    storage:
+      kind: "csv_or_json"
+      open_path:   "data/trades_open.csv"
+      closed_path: "data/trades_closed.csv"
+
+    required_fields:
+      schema_version: { type: literal, value: "v3" }
+
+      trade_id: { type: string, unique: true }
+      symbol:   { type: string }
+
+      # Snapshot links (do NOT embed snapshot object)
+      entry_snapshot_id: { type: string }
+      exit_snapshot_id:  { type: string, nullable: true }
+      entry_snapshot_time_utc:
+        type: int
+        description: "Must equal Snapshot.snapshot_time_utc for entry snapshot."
+      exit_snapshot_time_utc:
+        type: int
+        nullable: true
+        description: "Must equal Snapshot.snapshot_time_utc for exit snapshot (when CLOSED)."
+
+      # --------------------------
+      # Decision (immutable after OPEN)
+      # --------------------------
+      decision:
+        type: object
+        required_fields:
+          action_type:
+            type: int
+            allowed_values_ref: "enums.action_type.allowed_values"
+            description: "0=SHORT, 1=LONG"
+          direction:
+            type: string
+            allowed_values_ref: "enums.trade_direction.allowed_values"
+            description: "Derived from action_type; must be consistent."
+          entry_price: { type: float }
+          sl_price:    { type: float }
+          tp_price:    { type: float }
+          rr:          { type: float, min: 0.0 }
+          risk_unit:
+            type: float
+            description: "abs(entry_price - sl_price)"
+            min_exclusive: 0.0
+          confidence:
+            type: float
+            nullable: true
+            min: 0.0
+            max: 1.0
+          decision_time_utc:
+            type: int
+            description: "Should equal entry_snapshot_time_utc (decision candle close)."
+
+      # --------------------------
+      # Execution (can update while trade is OPEN; final when CLOSED)
+      # --------------------------
+      execution_state:
+        type: object
+        required_fields:
+          status:
+            type: string
+            allowed_values_ref: "enums.trade_status.allowed_values"
+
+          # execution timestamps/prices (real fills)
+          entry_time_utc:      { type: int, nullable: true }
+          entry_fill_price:    { type: float, nullable: true }
+          exit_time_utc:       { type: int, nullable: true }
+          exit_fill_price:     { type: float, nullable: true }
+          exit_type:
+            type: string
+            nullable: true
+            allowed_values_ref: "enums.exit_type.allowed_values"
+
+          # costs (used to compute pnl_raw net)
+          fees_total:          { type: float, default: 0.0 }
+          funding_paid:        { type: float, default: 0.0 }
+
+      # --------------------------
+      # Reward (attach once when CLOSED)
+      # --------------------------
+      reward_state:
+        type: object
+        nullable: true
+        required_fields_if_present:
+          pnl_raw:
+            type: float
+            description: "NET PnL (already subtract fees_total + funding_paid)."
+          pnl_r:
+            type: float
+            description: "pnl_raw / decision.risk_unit"
+          mfe: { type: float }
+          mae: { type: float }
+          holding_seconds:
+            type: int
+            description: "execution_state.exit_time_utc - execution_state.entry_time_utc"
+
+      # --------------------------
+      # Policy info (behavior policy for offline RL)
+      # --------------------------
+      policy_info:
+        type: object
+        required_fields:
+          policy_name:    { type: string }
+          policy_version: { type: string }
+          policy_type:
+            type: string
+            allowed_values_ref: "enums.policy_type.allowed_values"
+
+    invariants:
+      - "decision.risk_unit == abs(decision.entry_price - decision.sl_price)"
+      - "decision.action_type in [0,1] and must match decision.direction"
+      - "entry_snapshot_id is immutable after OPEN"
+      - "decision is immutable after OPEN"
+      - "exit_snapshot_id only set when status == CLOSED"
+      - "reward_state only present when status == CLOSED"
+      - "reward_state.pnl_r == reward_state.pnl_raw / decision.risk_unit"
+      - "holding_seconds >= 0"
+      - "snapshot objects must never be embedded inside trade record"
+
+  # ===========================================================================
+  # 3) OFFLINE-RL TRANSITION DATASET (CANONICAL TRAINING OUTPUT)
+  # ===========================================================================
+  rl_transition_dataset_v1:
+    storage:
+      kind: "parquet"
+      path: "data/datasets/rl/rl_dataset_v1.parquet"
+      contract_ref: "config/dataset_contract_v1.yaml"
+
+    semantics:
+      timestamp_entry: "entry snapshot candle close time (from entry_snapshot_time_utc)"
+      timestamp_exit:  "exit snapshot candle close time (from exit_snapshot_time_utc)"
+      pnl_raw: "NET pnl from execution (subtract fees/funding)"
+      reward:  "pnl_raw / action_sl_distance"
+      done:    "always True (trade-level transition)"
+
+    mapping_from_trade_aggregate:
+      identity:
+        symbol: "trade.symbol"
+        entry_snapshot_id: "trade.entry_snapshot_id"
+        exit_snapshot_id: "trade.exit_snapshot_id"
+        timestamp_entry: "trade.entry_snapshot_time_utc -> datetime"
+        timestamp_exit:  "trade.exit_snapshot_time_utc  -> datetime"
+      state:
+        state_features: "feature_mapper(snapshot_entry)"
+      action:
+        action_type: "trade.decision.action_type"
+        action_rr: "trade.decision.rr"
+        action_sl_distance: "trade.decision.risk_unit"
+        action_confidence: "trade.decision.confidence (fallback=1.0 for rule policy)"
+      reward:
+        pnl_raw: "trade.reward_state.pnl_raw"
+        reward:  "trade.reward_state.pnl_r"
+        mfe: "trade.reward_state.mfe"
+        mae: "trade.reward_state.mae"
+        holding_seconds: "trade.reward_state.holding_seconds"
+      next_state:
+        next_state_features: "feature_mapper(snapshot_exit)"
+      done: "True"
+      behavior_policy:
+        policy_name: "trade.policy_info.policy_name"
+        policy_version: "trade.policy_info.policy_version"
+        policy_type: "trade.policy_info.policy_type"
+
+
+
+  # ==========================================================================
+  # 4) DECISION CYCLE LOG (ONE ROW PER SYMBOL PER CYCLE, INCLUDING SKIP)
+  # ==========================================================================
+  decision_cycle_v1:
+    storage:
+      kind: "jsonl"
+      path: "data/runtime/decision_cycles.jsonl"
+      append_only: true
+
+    required_fields:
+      schema_version:   { type: literal, value: "v1" }
+      decision_id:      { type: string, unique: true }
+      snapshot_id:      { type: string }
+      snapshot_time_utc:{ type: int }
+      symbol:           { type: string }
+      exchange:         { type: string, nullable: true }
+      mode:             { type: string }
+      cycle_time_utc:   { type: int, nullable: true }
+
+      # Decision proposal (present even if blocked)
+      action_type:      { type: int, nullable: true }
+      direction:        { type: string, nullable: true }
+      entry_price:      { type: float, nullable: true }
+      sl_price:         { type: float, nullable: true }
+      tp_price:         { type: float, nullable: true }
+      rr:               { type: float, nullable: true }
+      risk_unit:        { type: float, nullable: true }
+
+      # Confidence decomposition
+      rule_confidence:  { type: float, nullable: true, min: 0.0, max: 1.0 }
+      model_score:      { type: float, nullable: true, min: 0.0, max: 1.0 }
+      final_confidence: { type: float, nullable: true, min: 0.0, max: 1.0 }
+
+      # Gates
+      risk_blocked:     { type: bool }
+      blocked_reason:   { type: string, nullable: true }
+
+      # Outcome linkage
+      is_opened:        { type: bool }
+      trade_id:         { type: string, nullable: true }
+
+  # ==========================================================================
+  # 4B) UNIVERSE SELECTION LOG (ONE ROW PER REFRESH)
+  # ==========================================================================
+  universe_selection_v2:
+    storage:
+      kind: "jsonl"
+      path: "data/runtime/universe_selection.jsonl"
+      append_only: true
+
+    required_fields:
+      schema_version: { type: string }
+      timestamp_utc:  { type: int }
+      exchange:       { type: string, nullable: true }
+      config:         { type: object, nullable: true }
+      selected:       { type: array }
+
+    notes: >
+      Each row stores the symbol universe chosen for AUTO mode.
+      Intended for audit and future AI universe-selection modeling.
+
+  # ==========================================================================
+  # 4C) UNIVERSE CYCLES LOG (ONE ROW PER SYMBOL PER REFRESH)
+  # ==========================================================================
+  universe_cycles_v1:
+    storage:
+      kind: "jsonl"
+      path: "data/runtime/universe_cycles.jsonl"
+      append_only: true
+
+    required_fields:
+      schema_version:    { type: literal, value: "universe_cycle_v1" }
+      timestamp_utc:     { type: int }
+      exchange:          { type: string, nullable: true }
+      selector_version:  { type: string, nullable: true }
+      symbol:            { type: string }
+      selected:          { type: int, min: 0, max: 1 }
+      rank:              { type: int, nullable: true }
+      score:             { type: float, nullable: true }
+
+      # Features (best-effort; nullable)
+      quote_vol_usdt:    { type: float, nullable: true }
+      atr_tf:            { type: string, nullable: true }
+      atr_pct:           { type: float, nullable: true }
+      atr_burst:         { type: float, nullable: true }
+      spread_pct:        { type: float, nullable: true }
+      funding_rate:      { type: float, nullable: true }
+      funding_z:         { type: float, nullable: true }
+      vol_accel:         { type: float, nullable: true }
+      open_interest:     { type: float, nullable: true }
+      oi_accel:          { type: float, nullable: true }
+
+    notes: >
+      AI-ready coin-selection training source.
+      One row per (refresh event, symbol) including negative samples.
+
+  # ==========================================================================
+  # 4D) UNIVERSE EACH CYCLE DATASET (PARQUET)
+  # ==========================================================================
+  universe_each_cycle_dataset_v1:
+    storage:
+      kind: "parquet"
+      path: "data/datasets/universe/universe_each_cycle_v1.parquet"
+      partition: null
+
+    required_fields:
+      timestamp_utc:     { type: int }
+      symbol:            { type: string }
+      selected:          { type: int, min: 0, max: 1 }
+      rank:              { type: int, nullable: true }
+      score:             { type: float, nullable: true }
+
+      quote_vol_usdt:    { type: float, nullable: true }
+      atr_pct:           { type: float, nullable: true }
+      atr_burst:         { type: float, nullable: true }
+      spread_pct:        { type: float, nullable: true }
+      funding_rate:      { type: float, nullable: true }
+      funding_z:         { type: float, nullable: true }
+      vol_accel:         { type: float, nullable: true }
+      open_interest:     { type: float, nullable: true }
+      oi_accel:          { type: float, nullable: true }
+      selector_version:  { type: string, nullable: true }
+
+    notes: >
+      Materialized dataset built from universe_cycles.jsonl.
+      Use tools/build_universe_each_cycle.py to generate.
+
+  # ==========================================================================
+  # 5) ORDER EVENTS LOG (OMS AUDIT)
+  # ==========================================================================
+  orders_log_v1:
+    storage:
+      kind: "jsonl"
+      path: "data/runtime/orders.jsonl"
+      append_only: true
+
+    required_fields:
+      schema_version: { type: literal, value: "v1" }
+      event_time_utc: { type: int }
+      event_type:     { type: string }
+      trade_id:       { type: string, nullable: true }
+      symbol:         { type: string, nullable: true }
+      order_id:       { type: string, nullable: true }
+      side:           { type: string, nullable: true }
+      qty:            { type: float, nullable: true }
+      price:          { type: float, nullable: true }
+      meta:           { type: object, nullable: true }
+
+  # ==========================================================================
+  # 6) EXECUTION EVENTS LOG (FILL AUDIT)
+  # ==========================================================================
+  executions_log_v1:
+    storage:
+      kind: "jsonl"
+      path: "data/runtime/executions.jsonl"
+      append_only: true
+
+    required_fields:
+      schema_version: { type: literal, value: "v1" }
+      event_time_utc: { type: int }
+      event_type:     { type: string }
+      trade_id:       { type: string, nullable: true }
+      symbol:         { type: string, nullable: true }
+      order_id:       { type: string, nullable: true }
+      fill_qty:       { type: float, nullable: true }
+      fill_price:     { type: float, nullable: true }
+      fee_paid:       { type: float, nullable: true }
+      meta:           { type: object, nullable: true }
+
+  # ==========================================================================
+  # 7) MARKET_EACH_CYCLE DATASET (CANONICAL SUPERVISED/META DATA)
+  # ==========================================================================
+  market_each_cycle_dataset_v1:
+    storage:
+      kind: "parquet"
+      path: "data/datasets/market/market_each_cycle_v1.parquet"
+
+    required_fields:
+      decision_id:       { type: string }
+      snapshot_id:       { type: string }
+      symbol:            { type: string }
+      snapshot_time_utc: { type: int }
+      exchange:          { type: string, nullable: true }
+      state_features:    { type: array }
+      feature_version:   { type: string }
+      feature_hash:      { type: string }
+      ltf_tf:            { type: string }
+
+
+# -----------------------------------------------------------------------------
+# PRODUCERS / CONSUMERS (WHO MUST EMIT WHAT)
+# -----------------------------------------------------------------------------
+producers:
+  observer_v3_bot: { emits: "objects.snapshot_v3" }
+  trade_builder_v3: { emits: "objects.trade_aggregate_v1.decision (+links+policy_info)" }
+  resolve_bot: { emits: "objects.trade_aggregate_v1.execution_state + reward_state (CLOSED)" }
+  dataset_v3_builder: { emits: "objects.rl_transition_dataset_v1" }
+
+consumers:
+  open_bot: { consumes: ["objects.snapshot_v3"], emits: ["objects.trade_aggregate_v1 (OPEN)"] }
+  resolve_bot: { consumes: ["objects.trade_aggregate_v1 (OPEN)"], emits: ["objects.trade_aggregate_v1 (CLOSED)"] }
+  tele_entry: { consumes: ["objects.trade_aggregate_v1.decision"] }
+  tele_exit:  { consumes: ["objects.trade_aggregate_v1.reward_state + execution_state"] }
+
+# -----------------------------------------------------------------------------
+# GUARDRAILS (NON-NEGOTIABLE)
+# -----------------------------------------------------------------------------
+guardrails:
+  - "No circular dependency: domain must not import infrastructure/tools"
+  - "No mixing runtime data and training data folders"
+  - "Snapshot immutable; never patched after write (context must be included before save or stored separately)"
+  - "Feature mapper deterministic, fixed-length, no reward/execution/future data"
+  - "Validators must fail-fast (no silent pass)"

@@ -1,0 +1,4 @@
+# Optional ML stack (CPU) for training/inference
+scikit-learn>=1.2
+xgboost>=2.0
+lightgbm>=4.0

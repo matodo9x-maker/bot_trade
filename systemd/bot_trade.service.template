@@ -1,0 +1,28 @@
+[Unit]
+Description=bot_trade runtime (supervisor)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=__PROJECT_DIR__
+EnvironmentFile=__ENV_FILE__
+Environment=BOT_ENV_FILE=__ENV_FILE__
+ExecStart=__PROJECT_DIR__/.venv/bin/python supervisor.py runtime
+Restart=always
+RestartSec=5
+
+# Security / hardening (safe defaults)
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+
+# Allow writing runtime data/logs
+ReadWritePaths=__PROJECT_DIR__/data __PROJECT_DIR__/logs
+
+User=__RUN_USER__
+Group=__RUN_GROUP__
+
+[Install]
+WantedBy=multi-user.target

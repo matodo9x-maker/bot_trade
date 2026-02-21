@@ -1,0 +1,256 @@
+version: v1
+output:
+  feature_count: 41
+encodings:
+  ltf_volatility_regime:
+    type: one_hot
+    values:
+    - dead
+    - normal
+    - expansion
+  ltf_hh_ll_state:
+    type: one_hot
+    values:
+    - HH
+    - HL
+    - LH
+    - LL
+  session:
+    type: one_hot
+    values:
+    - asia
+    - london
+    - ny
+  htf_trend:
+    type: one_hot
+    values:
+    - up
+    - down
+    - flat
+  htf_market_regime:
+    type: one_hot
+    values:
+    - trend
+    - range
+  htf_volatility_regime:
+    type: one_hot
+    values:
+    - normal
+    - high
+features:
+- key: ltf_close
+  path: $.ltf.price.close
+  type: float
+  default_value: 0.0
+- key: ltf_range_pct
+  path: $.ltf.price.range_pct
+  type: float
+  default_value: 0.0
+- key: ltf_atr_pct
+  path: $.ltf.price.atr_pct
+  type: float
+  default_value: 0.0
+- key: ltf_bos
+  path: $.ltf.micro_structure.bos
+  type: bool_to_float
+  default_value: 0.0
+- key: ltf_distance_to_structure
+  path: $.ltf.micro_structure.distance_to_structure
+  type: float
+  default_value: 0.0
+- key: funding_rate
+  path: $.context.funding_rate
+  type: float
+  default_value: 0.0
+- key: funding_zscore
+  path: $.context.funding_zscore
+  type: float
+  default_value: 0.0
+- key: spread_pct
+  path: $.context.spread_pct
+  type: float
+  default_value: 0.0
+- key: daily_atr_pct
+  path: $.context.daily_atr_pct
+  type: float
+  default_value: 0.0
+- key: daily_atr_ratio_30
+  path: $.context.daily_atr_ratio_30
+  type: float
+  default_value: 0.0
+- key: ltf_vol_regime_dead
+  encode:
+    ref: ltf_volatility_regime
+    value: dead
+  default_value: 0.0
+- key: ltf_vol_regime_normal
+  encode:
+    ref: ltf_volatility_regime
+    value: normal
+  default_value: 0.0
+- key: ltf_vol_regime_expansion
+  encode:
+    ref: ltf_volatility_regime
+    value: expansion
+  default_value: 0.0
+- key: ltf_hhll_HH
+  encode:
+    ref: ltf_hh_ll_state
+    value: HH
+  default_value: 0.0
+- key: ltf_hhll_HL
+  encode:
+    ref: ltf_hh_ll_state
+    value: HL
+  default_value: 0.0
+- key: ltf_hhll_LH
+  encode:
+    ref: ltf_hh_ll_state
+    value: LH
+  default_value: 0.0
+- key: ltf_hhll_LL
+  encode:
+    ref: ltf_hh_ll_state
+    value: LL
+  default_value: 0.0
+- key: session_asia
+  encode:
+    ref: session
+    value: asia
+  default_value: 0.0
+- key: session_london
+  encode:
+    ref: session
+    value: london
+  default_value: 0.0
+- key: session_ny
+  encode:
+    ref: session
+    value: ny
+  default_value: 0.0
+- key: htf_15m_trend_up
+  encode:
+    ref: htf_trend
+    timeframe: 15m
+    value: up
+  default_value: 0.0
+- key: htf_15m_trend_down
+  encode:
+    ref: htf_trend
+    timeframe: 15m
+    value: down
+  default_value: 0.0
+- key: htf_15m_trend_flat
+  encode:
+    ref: htf_trend
+    timeframe: 15m
+    value: flat
+  default_value: 0.0
+- key: htf_15m_mr_trend
+  encode:
+    ref: htf_market_regime
+    timeframe: 15m
+    value: trend
+  default_value: 0.0
+- key: htf_15m_mr_range
+  encode:
+    ref: htf_market_regime
+    timeframe: 15m
+    value: range
+  default_value: 0.0
+- key: htf_15m_vol_normal
+  encode:
+    ref: htf_volatility_regime
+    timeframe: 15m
+    value: normal
+  default_value: 0.0
+- key: htf_15m_vol_high
+  encode:
+    ref: htf_volatility_regime
+    timeframe: 15m
+    value: high
+  default_value: 0.0
+- key: htf_1h_trend_up
+  encode:
+    ref: htf_trend
+    timeframe: 1h
+    value: up
+  default_value: 0.0
+- key: htf_1h_trend_down
+  encode:
+    ref: htf_trend
+    timeframe: 1h
+    value: down
+  default_value: 0.0
+- key: htf_1h_trend_flat
+  encode:
+    ref: htf_trend
+    timeframe: 1h
+    value: flat
+  default_value: 0.0
+- key: htf_1h_mr_trend
+  encode:
+    ref: htf_market_regime
+    timeframe: 1h
+    value: trend
+  default_value: 0.0
+- key: htf_1h_mr_range
+  encode:
+    ref: htf_market_regime
+    timeframe: 1h
+    value: range
+  default_value: 0.0
+- key: htf_1h_vol_normal
+  encode:
+    ref: htf_volatility_regime
+    timeframe: 1h
+    value: normal
+  default_value: 0.0
+- key: htf_1h_vol_high
+  encode:
+    ref: htf_volatility_regime
+    timeframe: 1h
+    value: high
+  default_value: 0.0
+- key: htf_4h_trend_up
+  encode:
+    ref: htf_trend
+    timeframe: 4h
+    value: up
+  default_value: 0.0
+- key: htf_4h_trend_down
+  encode:
+    ref: htf_trend
+    timeframe: 4h
+    value: down
+  default_value: 0.0
+- key: htf_4h_trend_flat
+  encode:
+    ref: htf_trend
+    timeframe: 4h
+    value: flat
+  default_value: 0.0
+- key: htf_4h_mr_trend
+  encode:
+    ref: htf_market_regime
+    timeframe: 4h
+    value: trend
+  default_value: 0.0
+- key: htf_4h_mr_range
+  encode:
+    ref: htf_market_regime
+    timeframe: 4h
+    value: range
+  default_value: 0.0
+- key: htf_4h_vol_normal
+  encode:
+    ref: htf_volatility_regime
+    timeframe: 4h
+    value: normal
+  default_value: 0.0
+- key: htf_4h_vol_high
+  encode:
+    ref: htf_volatility_regime
+    timeframe: 4h
+    value: high
+  default_value: 0.0

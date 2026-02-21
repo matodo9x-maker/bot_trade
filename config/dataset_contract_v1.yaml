@@ -1,0 +1,117 @@
+version: v1
+dataset_type: rl_transition
+
+identity:
+  transition_id:
+    type: string
+    required: true
+    unique: true
+
+  episode_id:
+    type: string
+    required: true
+
+  symbol:
+    type: string
+    required: true
+
+  timestamp_entry:
+    type: datetime
+    required: true
+
+  timestamp_exit:
+    type: datetime
+    required: true
+
+state:
+  state_features:
+    type: float_array
+    required: true
+    fixed_length: true
+    allow_nan: false
+
+  state_version:
+    type: string
+    required: true
+
+  feature_version:
+    type: string
+    required: true
+
+  feature_hash:
+    type: string
+    required: true
+
+action:
+  action_type:
+    type: int
+    required: true
+    allowed_values: [0, 1]  # 0=short, 1=long
+
+  action_rr:
+    type: float
+    required: true
+
+  action_sl_distance:
+    type: float
+    required: true
+
+  action_confidence:
+    type: float
+    required: true
+    min: 0.0
+    max: 1.0
+
+reward:
+  reward:
+    type: float
+    required: true
+
+  pnl_raw:
+    type: float
+    required: true
+
+  mfe:
+    type: float
+    required: true
+
+  mae:
+    type: float
+    required: true
+
+  holding_seconds:
+    type: float
+    required: true
+
+next_state:
+  next_state_features:
+    type: float_array
+    required: true
+    fixed_length: true
+    allow_nan: false
+
+done:
+  type: bool
+  required: true
+
+behavior_policy:
+  policy_name:
+    type: string
+    required: true
+
+  policy_version:
+    type: string
+    required: true
+
+  policy_type:
+    type: string
+    required: true
+    allowed_values: ["rule", "ai", "ensemble"]
+
+validation_rules:
+  - state_features length == next_state_features length
+  - timestamp_entry <= timestamp_exit
+  - done == true
+  - action_confidence between 0 and 1
+  - no reward-related data inside state_features
+  - no exit-related data inside state_features
